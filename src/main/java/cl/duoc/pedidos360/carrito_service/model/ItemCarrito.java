@@ -19,7 +19,7 @@ import java.math.BigDecimal;
 /**
  * relojId apunta a un reloj que vive en el microservicio de Productos
  * (base de datos distinta) - no es una relacion JPA real, solo un id de
- * referencia entre servicios. marca/modelo/precioUnitario quedan guardados
+ * referencia entre servicios. marca/modelo/categoria/precioUnitario quedan guardados
  * como "foto" del momento en que se agrego el item.
  */
 @Entity
@@ -39,6 +39,9 @@ public class ItemCarrito {
     private String marca;
 
     private String modelo;
+
+    /** Opcional: categoria del reloj (ej. Deportivo). Se usa en los eventos de Kafka para analitica. */
+    private String categoria;
 
     @NotNull(message = "El precio unitario es obligatorio")
     @Positive(message = "El precio unitario debe ser mayor a 0")

@@ -1,5 +1,7 @@
 package cl.duoc.pedidos360.carrito_service.service;
 
+import cl.duoc.pedidos360.carrito_service.event.UserEventPublisher;
+import cl.duoc.pedidos360.carrito_service.event.UserEventType;
 import cl.duoc.pedidos360.carrito_service.exception.CarritoConfirmadoException;
 import cl.duoc.pedidos360.carrito_service.exception.ResourceNotFoundException;
 import cl.duoc.pedidos360.carrito_service.model.Carrito;
@@ -14,9 +16,11 @@ import java.time.LocalDateTime;
 public class CarritoService {
 
     private final CarritoRepository carritoRepository;
+    private final UserEventPublisher userEventPublisher;
 
-    public CarritoService(CarritoRepository carritoRepository) {
+    public CarritoService(CarritoRepository carritoRepository, UserEventPublisher userEventPublisher) {
         this.carritoRepository = carritoRepository;
+        this.userEventPublisher = userEventPublisher;
     }
 
     public Carrito crearCarrito(String usuarioId) {
@@ -38,20 +42,26 @@ public class CarritoService {
         item.setCarrito(carrito);
         carrito.getItems().add(item);
 
-        return carritoRepository.save(carrito);
+        Carrito guardado = carritoRepository.save(carrito);
+        publicar(UserEventType.ADDED_TO_CART, carrito, item);
+        return guardado;
     }
 
     public Carrito quitarItem(Long carritoId, Long itemId) {
         Carrito carrito = obtenerPorId(carritoId);
         validarAbierto(carrito);
 
-        boolean existia = carrito.getItems().removeIf(item -> item.getId().equals(itemId));
-        if (!existia) {
-            throw new ResourceNotFoundException(
-                    "El carrito " + carritoId + " no tiene un item con id " + itemId);
-        }
+        // Se busca primero para conservar sus datos y poder publicar el evento despues de borrarlo
+        ItemCarrito quitado = carrito.getItems().stream()
+                .filter(item -> item.getId().equals(itemId))
+                .findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "El carrito " + carritoId + " no tiene un item con id " + itemId));
+        carrito.getItems().removeIf(item -> item.getId().equals(itemId));
 
-        return carritoRepository.save(carrito);
+        Carrito guardado = carritoRepository.save(carrito);
+        publicar(UserEventType.REMOVED_FROM_CART, carrito, quitado);
+        return guardado;
     }
 
     public Carrito confirmar(Long carritoId) {
@@ -64,7 +74,23 @@ public class CarritoService {
 
         carrito.setEstado(EstadoCarrito.CONFIRMADO);
         carrito.setFechaConfirmacion(LocalDateTime.now());
-        return carritoRepository.save(carrito);
+        Carrito guardado = carritoRepository.save(carrito);
+
+        // Un evento CART_CONFIRMED por cada item (con su cantidad)
+        for (ItemCarrito item : guardado.getItems()) {
+            publicar(UserEventType.CART_CONFIRMED, guardado, item);
+        }
+        return guardado;
+    }
+
+    /**
+     * Publica el evento en Kafka con el usuarioId guardado al crear el carrito.
+     * Si el carrito no tiene usuario (se creo sin token), el publisher no envia nada.
+     * Si Kafka falla, solo se loguea: la operacion del carrito no se ve afectada.
+     */
+    private void publicar(UserEventType tipo, Carrito carrito, ItemCarrito item) {
+        userEventPublisher.publicar(tipo, carrito.getUsuarioId(), item.getRelojId(),
+                item.getCategoria(), item.getMarca(), item.getCantidad());
     }
 
     private void validarAbierto(Carrito carrito) {
